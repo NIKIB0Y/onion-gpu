@@ -1,0 +1,20 @@
+# Build output
+onion-gpu
+*.o
+*.obj
+
+# Generated keys -- never commit these
+*_hs_ed25519_secret_key
+*_hs_ed25519_public_key
+*_hostname
+*.onion
+output/
+
+# Editor / OS
+*.swp
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc

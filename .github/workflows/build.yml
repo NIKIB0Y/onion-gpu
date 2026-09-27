@@ -1,0 +1,48 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compile:
+    # Compile-only: GitHub's hosted runners have no NVIDIA GPU, so the kernels
+    # cannot be executed here.  Run `./onion-gpu --bench <prefix>` locally to
+    # exercise the self-tests.
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.9.1-devel-ubuntu24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [sm_75, sm_86, sm_89, sm_90, sm_120]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile for ${{ matrix.arch }}
+        run: make ARCH=${{ matrix.arch }}
+
+  verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Check verify.py parses and its Ed25519 math is self-consistent
+        run: |
+          python3 -m py_compile verify.py
+          python3 - <<'PY'
+          import verify
+          # scalar 1 must give the base point; RFC 8032 vector 1 must reproduce.
+          import hashlib
+          assert verify.encode_point(verify.B).hex() == \
+              "5866666666666666666666666666666666666666666666666666666666666666"
+          seed = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+          h = bytearray(hashlib.sha512(seed).digest()[:32])
+          h[0] &= 248; h[31] &= 127; h[31] |= 64
+          pub = verify.encode_point(verify.mul(verify.B, int.from_bytes(h, "little")))
+          assert pub.hex() == \
+              "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", pub.hex()
+          print("verify.py Ed25519 implementation OK")
+          PY
