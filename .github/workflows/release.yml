@@ -75,7 +75,10 @@ jobs:
 
       - name: Build (all major architectures, static runtime and CRT)
         shell: cmd
-        run: '"%CUDA_PATH%\bin\nvcc.exe" -O3 -arch=all-major -cudart static -Xcompiler "/O2 /MT" -I. -o onion-gpu.exe main.cu'
+        # No -O3 here: nvcc forwards -O to the HOST compiler, and cl.exe rejects
+        # "-O3" (D8021).  Host optimisation is /O2 via -Xcompiler; device code is
+        # optimised by default.
+        run: '"%CUDA_PATH%\bin\nvcc.exe" -arch=all-major -cudart static -Xcompiler "/O2 /MT" -I. -o onion-gpu.exe main.cu'
 
       - name: Package
         shell: pwsh

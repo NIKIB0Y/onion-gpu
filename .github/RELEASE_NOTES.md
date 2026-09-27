@@ -3,11 +3,12 @@ CUDA toolkit** — only an NVIDIA driver.
 
 | Download | For |
 |----------|-----|
-| `onion-gpu-linux-x86_64.tar.gz` | any x86-64 Linux with glibc 2.31+ (Ubuntu 20.04+, Debian 11+, RHEL 8+) |
+| `onion-gpu-linux-x86_64.tar.gz` | any x86-64 Linux with glibc 2.29+ (Ubuntu 20.04+, Debian 11+, RHEL 9+) |
 | `onion-gpu-windows-x86_64.zip` | Windows 10/11 x64 |
 
-Both contain GPU code for every major architecture from Maxwell (GTX 900) through
-Blackwell (RTX 50xx), plus PTX so future GPUs work by JIT.
+Both contain GPU code for `sm_50, 60, 70, 80, 90, 100, 120` — every major
+architecture from Maxwell (GTX 900) through Blackwell (RTX 50xx) — plus PTX so future
+GPUs work by JIT. The Linux binary links only `libc.so.6`; nothing else is needed.
 
 ### Linux
 
