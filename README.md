@@ -127,9 +127,13 @@ Command Prompt (Visual Studio C++ tools are required by `nvcc` itself):
 nvcc -arch=native -cudart static -Xcompiler "/O2 /MT" -I. -o onion-gpu.exe main.cu
 ```
 
-(`-O3` is deliberately absent: nvcc forwards `-O` to the host compiler and `cl.exe`
-rejects `-O3`. Host optimisation comes from `/O2`, and device code is optimised by
-default.)
+Host optimisation comes from `/O2` (the MSVC spelling of `-O3`) and device code is
+optimised by default, so no `-O` flag is needed.
+
+Note that CUDA is picky about the Visual Studio version: CUDA 12.9 rejects Visual
+Studio 18 with *"unsupported Microsoft Visual Studio version"*. Either use a CUDA
+release that lists your VS version as supported, or pass
+`-allow-unsupported-compiler` at your own risk.
 
 Use `-arch=all-major` in place of `-arch=native` to build a binary that runs on any
 GPU rather than only the one in the build machine.

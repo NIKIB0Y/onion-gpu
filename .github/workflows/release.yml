@@ -49,7 +49,11 @@ jobs:
           path: onion-gpu-linux-x86_64.tar.gz
 
   windows:
-    runs-on: windows-latest
+    # Pinned, not windows-latest: that image now ships Visual Studio 18, which
+    # CUDA 12.9 rejects outright ("unsupported Microsoft Visual Studio version"
+    # from crt/host_config.h).  windows-2022 has a toolset CUDA 12.9 supports,
+    # which keeps this a supported pairing instead of bypassing the check.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
@@ -75,9 +79,8 @@ jobs:
 
       - name: Build (all major architectures, static runtime and CRT)
         shell: cmd
-        # No -O3 here: nvcc forwards -O to the HOST compiler, and cl.exe rejects
-        # "-O3" (D8021).  Host optimisation is /O2 via -Xcompiler; device code is
-        # optimised by default.
+        # Host optimisation is /O2 via -Xcompiler (the MSVC spelling); device code
+        # is optimised by default, so no -O flag is needed here.
         run: '"%CUDA_PATH%\bin\nvcc.exe" -arch=all-major -cudart static -Xcompiler "/O2 /MT" -I. -o onion-gpu.exe main.cu'
 
       - name: Package
