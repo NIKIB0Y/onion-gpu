@@ -8,7 +8,9 @@ CUDA toolkit** — only an NVIDIA driver.
 
 Both contain GPU code for `sm_50, 60, 70, 80, 90, 100, 120` — every major
 architecture from Maxwell (GTX 900) through Blackwell (RTX 50xx) — plus PTX so future
-GPUs work by JIT. The Linux binary links only `libc.so.6`; nothing else is needed.
+GPUs work by JIT. The Linux binary links nothing outside glibc (`libc`, `libm`,
+`libpthread`, `librt`, `libdl`) and needs glibc 2.29+; the Windows build links the
+CRT statically.
 
 ### Linux
 
@@ -38,9 +40,12 @@ sha256sum -c SHA256SUMS.txt
 The **Linux** binary is run and verified on an RTX 5060 before release: the built-in
 self-tests pass and generated keys are checked with `verify.py`.
 
-The **Windows** build is compile-verified only. GitHub's runners have no NVIDIA GPU,
-so no automated test can execute a kernel, and the author has no Windows machine to
-test on. The Windows-specific code paths are entropy (`BCryptGenRandom`), file
-creation and memory locking. If something misbehaves on Windows, please open an
-issue — and see SECURITY.md for one real limitation: Windows builds cannot apply
-POSIX `0600` permissions to the secret key file.
+The **Windows** build is never executed before release — GitHub's runners have no
+NVIDIA GPU and the author has no Windows machine. What is verified: it compiles, it
+is a valid PE32+ console executable, its embedded device-code section is complete,
+and it does import `BCryptGenRandom` and `VirtualLock`. Its runtime behaviour is
+untested, so please open an issue if anything misbehaves.
+
+See SECURITY.md for one real Windows limitation: the build cannot apply POSIX `0600`
+permissions to the secret key file, so keep generated keys in a directory only your
+account can read.

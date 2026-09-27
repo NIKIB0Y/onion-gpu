@@ -18,9 +18,11 @@ Needs an NVIDIA GPU, the CUDA toolkit, and Linux.
 Pre-built binaries are on the [releases
 page](https://github.com/NIKIB0Y/onion-gpu/releases). They statically link the CUDA
 runtime, so **you only need an NVIDIA driver — not the CUDA toolkit**. The Linux
-binary's only shared-library dependency is `libc.so.6`, and both carry GPU code for
-`sm_50, 60, 70, 80, 90, 100, 120` — every major architecture from Maxwell (GTX 900)
-through Blackwell (RTX 50xx) — plus PTX so future cards work by JIT.
+binary links nothing outside glibc itself (`libc`, `libm`, `libpthread`, `librt`,
+`libdl`) and needs glibc 2.29 or newer; the Windows build links the CRT statically.
+Both carry GPU code for `sm_50, 60, 70, 80, 90, 100, 120` — every major architecture
+from Maxwell (GTX 900) through Blackwell (RTX 50xx) — plus PTX so future cards work
+by JIT.
 
 | File | For |
 |------|-----|
@@ -34,10 +36,14 @@ tar xzf onion-gpu-linux-x86_64.tar.gz && cd onion-gpu-linux-x86_64
 
 On Windows, unzip and run `onion-gpu.exe -n 1 -o keys vanity`.
 
-The Linux binary is executed and its output verified on real hardware before each
-release. The Windows binary is **compile-verified only** — no CI runner has an NVIDIA
-GPU and the author has no Windows machine, so its runtime behaviour is untested.
-Please report anything that misbehaves there.
+The Linux binary is executed on an RTX 5060 before release: self-tests pass and a
+generated key is checked with `verify.py`.
+
+The Windows binary is **never executed before release** — no CI runner has an NVIDIA
+GPU. What is checked is that it compiles, that it is a valid PE32+ console
+executable, that its embedded device-code section is present and complete, and that
+it really does import `BCryptGenRandom` and `VirtualLock`. Its actual runtime
+behaviour on Windows is untested; please report anything that misbehaves.
 
 ## Quick start (from source)
 
