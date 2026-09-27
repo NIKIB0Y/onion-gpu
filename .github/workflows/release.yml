@@ -60,9 +60,22 @@ jobs:
           method: 'network'
           sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
 
+      # nvcc drives cl.exe, which is not on PATH on a bare runner.  Without
+      # this the build step fails instantly with "Cannot find compiler 'cl.exe'".
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Show toolchain (so a failure here is diagnosable)
+        shell: cmd
+        run: |
+          echo CUDA_PATH=%CUDA_PATH%
+          where nvcc
+          where cl
+          "%CUDA_PATH%\bin\nvcc.exe" --version
+
       - name: Build (all major architectures, static runtime and CRT)
         shell: cmd
-        run: nvcc -O3 -arch=all-major -cudart static -Xcompiler "/O2 /MT" -I. -o onion-gpu.exe main.cu
+        run: '"%CUDA_PATH%\bin\nvcc.exe" -O3 -arch=all-major -cudart static -Xcompiler "/O2 /MT" -I. -o onion-gpu.exe main.cu'
 
       - name: Package
         shell: pwsh
