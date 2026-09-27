@@ -13,7 +13,32 @@ machine](#comparison-with-mkp224o).
 
 Needs an NVIDIA GPU, the CUDA toolkit, and Linux.
 
-## Quick start
+## Download
+
+Pre-built binaries are on the [releases
+page](https://github.com/NIKIB0Y/onion-gpu/releases). They statically link the CUDA
+runtime, so **you only need an NVIDIA driver — not the CUDA toolkit**, and they carry
+GPU code for every major architecture from Maxwell (GTX 900) through Blackwell
+(RTX 50xx), plus PTX so future cards work by JIT.
+
+| File | For |
+|------|-----|
+| `onion-gpu-linux-x86_64.tar.gz` | any x86-64 Linux with glibc 2.31+ (Ubuntu 20.04+, Debian 11+, RHEL 8+) |
+| `onion-gpu-windows-x86_64.zip` | Windows 10/11 x64 |
+
+```bash
+tar xzf onion-gpu-linux-x86_64.tar.gz && cd onion-gpu-linux-x86_64
+./onion-gpu -n 1 -o keys vanity
+```
+
+On Windows, unzip and run `onion-gpu.exe -n 1 -o keys vanity`.
+
+The Linux binary is executed and its output verified on real hardware before each
+release. The Windows binary is **compile-verified only** — no CI runner has an NVIDIA
+GPU and the author has no Windows machine, so its runtime behaviour is untested.
+Please report anything that misbehaves there.
+
+## Quick start (from source)
 
 ```bash
 make                                  # targets your GPU automatically
@@ -92,14 +117,28 @@ make ARCH=all-major   # every architecture the toolkit knows (larger binary)
 
 On distributions where `nvcc` is not on `PATH`, add `NVCC=/opt/cuda/bin/nvcc`.
 
+### Windows
+
+There is no makefile for Windows; build directly with `nvcc` from a Developer
+Command Prompt (Visual Studio C++ tools are required by `nvcc` itself):
+
+```
+nvcc -O3 -arch=native -cudart static -Xcompiler "/O2 /MT" -I. -o onion-gpu.exe main.cu
+```
+
+Use `-arch=all-major` in place of `-arch=native` to build a binary that runs on any
+GPU rather than only the one in the build machine.
+
 ## Compatibility
 
 Developed and measured on an RTX 5060 (Blackwell, sm_120) with CUDA 13.4 on Linux.
 Compilation is verified for sm_75 through sm_120; **execution has only been tested
 on that one card**, so treat other GPUs as untested rather than unsupported.
 
-- **Linux only.** Uses `getrandom(2)`, `mlock` and POSIX file APIs. Windows would
-  need porting; macOS has no CUDA support at all any more.
+- **Linux and Windows.** Entropy comes from `getrandom(2)` on Linux and
+  `BCryptGenRandom` on Windows; memory locking uses `mlock` / `VirtualLock`. macOS
+  has no CUDA support at all any more. Note that Windows builds cannot apply POSIX
+  `0600` permissions to the secret key file — see [SECURITY.md](SECURITY.md).
 - **Any CUDA-capable NVIDIA GPU** in principle — nothing architecture-specific is
   used, and `make` targets whatever card you have. Note that CUDA 13 dropped
   Maxwell, Pascal and Volta (sm_50–sm_70); those need CUDA 12.x. Blackwell

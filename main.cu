@@ -11,11 +11,51 @@
 #include <errno.h>
 #include <signal.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <sys/stat.h>
-#include <sys/random.h>
-#include <sys/mman.h>
+#include <chrono>
 #include <cuda_runtime.h>
+
+// -------------------------------------------------------------------------
+// Platform shims.  Everything the search itself does is portable; only
+// entropy, file creation and memory locking differ.
+// -------------------------------------------------------------------------
+#ifdef _WIN32
+  #include <windows.h>
+  #include <bcrypt.h>
+  #include <io.h>
+  #include <direct.h>
+  #pragma comment(lib, "bcrypt.lib")
+  #define OPEN        _open
+  #define WRITE       _write
+  #define CLOSE       _close
+  #define UNLINK      _unlink
+  #define FSYNC       _commit
+  #define ACCESS      _access
+  #define ACCESS_RW   2                  /* no X_OK on Windows */
+  #define MKDIR(p)    _mkdir(p)
+  #define O_EXTRA     _O_BINARY
+  typedef int mode_t;
+  typedef long long ssize_type;
+#else
+  #include <unistd.h>
+  #include <sys/random.h>
+  #include <sys/mman.h>
+  #define OPEN        open
+  #define WRITE       write
+  #define CLOSE       close
+  #define UNLINK      unlink
+  #define FSYNC       fsync
+  #define ACCESS      access
+  #define ACCESS_RW   (W_OK | X_OK)
+  #define MKDIR(p)    mkdir(p, 0700)
+  #define O_EXTRA     0
+  typedef ssize_t ssize_type;
+#endif
+
+typedef std::chrono::steady_clock clk;
+static double secs(clk::time_point a, clk::time_point b) {
+    return std::chrono::duration<double>(b - a).count();
+}
 
 #include "sha512.cuh"
 #include "sha3_256.cuh"
@@ -476,8 +516,17 @@ static void host_address(const uint8_t pubkey[32], char out[57]) {
 // -------------------------------------------------------------------------
 // Entropy and secret handling
 // -------------------------------------------------------------------------
+// The secret keys this program can emit are only as unpredictable as this.
 static void get_entropy(void *buf, size_t len) {
     uint8_t *p = (uint8_t *)buf;
+#ifdef _WIN32
+    NTSTATUS st = BCryptGenRandom(NULL, (PUCHAR)p, (ULONG)len,
+                                  BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (st != 0) {
+        fprintf(stderr, "BCryptGenRandom failed (0x%lx)\n", (unsigned long)st);
+        exit(1);
+    }
+#else
     size_t got = 0;
     while (got < len) {
         ssize_t n = getrandom(p + got, len - got, 0);
@@ -499,6 +548,7 @@ static void get_entropy(void *buf, size_t len) {
         }
         got += (size_t)n;
     }
+#endif
 }
 
 static void secure_zero(void *p, size_t n) {
@@ -509,33 +559,38 @@ static void secure_zero(void *p, size_t n) {
 // -------------------------------------------------------------------------
 // Key files
 // -------------------------------------------------------------------------
+// O_EXCL so an existing key is never overwritten, and fsync before the caller
+// reports success.  On POSIX the mode is also applied explicitly with fchmod so
+// the umask cannot loosen it; Windows has no equivalent -- see SECURITY.md.
 static int write_file(const char *path, const void *buf, size_t len, mode_t mode) {
-    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, mode);
+    int fd = OPEN(path, O_WRONLY | O_CREAT | O_EXCL | O_EXTRA, mode);
     if (fd < 0) {
         fprintf(stderr, "Cannot create %s: %s\n", path, strerror(errno));
         return -1;
     }
+#ifndef _WIN32
     if (fchmod(fd, mode) != 0)
         fprintf(stderr, "Warning: cannot set mode on %s: %s\n", path, strerror(errno));
+#endif
 
     const uint8_t *p = (const uint8_t *)buf;
     size_t off = 0;
     while (off < len) {
-        ssize_t n = write(fd, p + off, len - off);
+        ssize_type n = WRITE(fd, p + off, (unsigned int)(len - off));
         if (n <= 0) {
             if (n < 0 && errno == EINTR) continue;
             fprintf(stderr, "Write failed on %s: %s\n", path, strerror(errno));
-            close(fd);
+            CLOSE(fd);
             return -1;
         }
         off += (size_t)n;
     }
-    if (fsync(fd) != 0) {
-        fprintf(stderr, "fsync failed on %s: %s\n", path, strerror(errno));
-        close(fd);
+    if (FSYNC(fd) != 0) {
+        fprintf(stderr, "Cannot flush %s to disk: %s\n", path, strerror(errno));
+        CLOSE(fd);
         return -1;
     }
-    if (close(fd) != 0) {
+    if (CLOSE(fd) != 0) {
         fprintf(stderr, "close failed on %s: %s\n", path, strerror(errno));
         return -1;
     }
@@ -590,12 +645,14 @@ static int write_key_files(const char *outdir, const Result *r) {
         // Never leave a half-written key set: an address whose secret is
         // missing is useless, and one whose public file is missing is
         // confusing.  Remove whatever this key managed to create.
-        unlink(secp); unlink(pubp); unlink(hostp);
+        UNLINK(secp); UNLINK(pubp); UNLINK(hostp);
     }
 
     if (rc == 0) {
+#ifndef _WIN32
         int dfd = open(outdir, O_RDONLY | O_DIRECTORY);
         if (dfd >= 0) { fsync(dfd); close(dfd); }
+#endif
         printf("    %s\n    %s\n    %s\n", secp, pubp, hostp);
     }
     return rc;
@@ -684,14 +741,15 @@ int main(int argc, char **argv) {
     char tb[64];
     printf("Prefix: %s   expected attempts: %.3g\n", prefix, expected);
 
-    if (mkdir(outdir, 0700) != 0 && errno != EEXIST) {
+    if (MKDIR(outdir) != 0 && errno != EEXIST) {
         fprintf(stderr, "Cannot create output directory %s: %s\n", outdir, strerror(errno));
         return 1;
     }
-    if (access(outdir, W_OK | X_OK) != 0) {
+    if (ACCESS(outdir, ACCESS_RW) != 0) {
         fprintf(stderr, "Output directory %s is not writable: %s\n", outdir, strerror(errno));
         return 1;
     }
+#ifndef _WIN32
     {
         struct stat st;
         if (!bench && stat(outdir, &st) == 0 && (st.st_mode & 0077))
@@ -699,6 +757,7 @@ int main(int argc, char **argv) {
                    "         a HiddenServiceDir with group or other permissions.\n",
                    outdir, (unsigned)(st.st_mode & 07777));
     }
+#endif
 
     signal(SIGINT, handle_sigint);
     signal(SIGTERM, handle_sigint);
@@ -784,8 +843,12 @@ int main(int argc, char **argv) {
     h_results = (Result *)calloc(MAX_SLOTS, sizeof(Result));
     if (!h_results) { fprintf(stderr, "out of memory\n"); return 1; }
     // Best-effort: keep the window where secret scalars sit in host memory out
-    // of swap.  Not fatal if the rlimit forbids it.
+    // of swap.  Not fatal if the OS refuses.
+#ifdef _WIN32
+    (void)VirtualLock(h_results, sizeof(Result) * MAX_SLOTS);
+#else
     (void)mlock(h_results, sizeof(Result) * MAX_SLOTS);
+#endif
 
     unsigned long long zero64 = 0;
     CUDA_CHECK(cudaMemcpy(d_counter, &zero64, sizeof(zero64), cudaMemcpyHostToDevice));
@@ -797,8 +860,7 @@ int main(int argc, char **argv) {
     long found_total = 0;
     unsigned long long total_keys = 0, hits_total = 0;
     unsigned long long launch_idx = 0;
-    struct timespec t0;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    clk::time_point t0 = clk::now();
 
     while (!g_stop && (bench ? (launch_idx < 1) : (found_total < want))) {
         unsigned int stop_at = bench ? 0xffffffffu
@@ -815,12 +877,11 @@ int main(int argc, char **argv) {
         Shared sh = {0, 0, 0};
         CUDA_CHECK(cudaMemcpy(d_shared, &sh, sizeof(sh), cudaMemcpyHostToDevice));
 
-        struct timespec l0, l1;
-        clock_gettime(CLOCK_MONOTONIC, &l0);
+        clk::time_point l0 = clk::now();
         vanity_kernel<<<BLOCKS, THREADS_PER_BLOCK>>>(
             plen, target, mask, launch_idx, d_results, d_shared, stop_at, d_counter);
         CUDA_CHECK(cudaDeviceSynchronize());
-        clock_gettime(CLOCK_MONOTONIC, &l1);
+        clk::time_point l1 = clk::now();
 
         CUDA_CHECK(cudaMemcpy(&sh, d_shared, sizeof(sh), cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(&total_keys, d_counter, sizeof(total_keys), cudaMemcpyDeviceToHost));
@@ -845,8 +906,8 @@ int main(int argc, char **argv) {
             CUDA_CHECK(cudaMemset(d_results, 0, sizeof(Result) * n));
         }
 
-        double lelapsed = (l1.tv_sec - l0.tv_sec) + (l1.tv_nsec - l0.tv_nsec)*1e-9;
-        double elapsed  = (l1.tv_sec - t0.tv_sec) + (l1.tv_nsec - t0.tv_nsec)*1e-9;
+        double lelapsed = secs(l0, l1);
+        double elapsed   = secs(t0, l1);
         double rate     = elapsed > 0 ? total_keys / elapsed : 0;
 
         if (bench) {
@@ -872,7 +933,11 @@ int main(int argc, char **argv) {
     }
 
     secure_zero(h_results, sizeof(Result) * MAX_SLOTS);
-    munlock(h_results, sizeof(Result) * MAX_SLOTS);
+#ifdef _WIN32
+    (void)VirtualUnlock(h_results, sizeof(Result) * MAX_SLOTS);
+#else
+    (void)munlock(h_results, sizeof(Result) * MAX_SLOTS);
+#endif
     free(h_results);
     CUDA_CHECK(cudaMemset(d_results, 0, sizeof(Result) * MAX_SLOTS));
     CUDA_CHECK(cudaFree(d_results));

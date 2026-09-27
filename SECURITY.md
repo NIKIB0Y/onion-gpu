@@ -24,6 +24,21 @@ final scalar by full scalar multiplication and cross-checked against the increme
 chain, and the host re-derives the address from the public key independently before
 writing. `verify.py` re-checks written keys in pure Python with no shared code.
 
+## Platform differences
+
+On Linux the secret key file is created with `O_EXCL` and forced to mode `0600` with
+an explicit `fchmod`, so the umask cannot loosen it. **Windows has no equivalent**:
+the file inherits the ACL of the directory it is created in. Keep generated keys in a
+directory only your account can read, and treat the Windows build as offering weaker
+at-rest protection for that reason.
+
+Windows entropy comes from `BCryptGenRandom` with
+`BCRYPT_USE_SYSTEM_PREFERRED_RNG`; Linux uses `getrandom(2)` with a `/dev/urandom`
+fallback.
+
+The Windows build is compile-verified in CI but has not been executed on a GPU by the
+author. Prefer the Linux build for keys you intend to deploy.
+
 ## Known limitations
 
 - **Not constant-time.** Scalar multiplication branches on secret bits. Acceptable

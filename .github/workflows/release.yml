@@ -1,0 +1,98 @@
+name: release
+
+# Builds the downloadable binaries and attaches them to a GitHub release.
+# Neither runner has an NVIDIA GPU, so these builds are compile-only: the
+# kernels cannot be executed here.  Both binaries statically link the CUDA
+# runtime, so a user needs only an NVIDIA driver -- not the CUDA toolkit.
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    # Ubuntu 20.04 base => glibc 2.31, so the binary also runs on anything
+    # newer (Debian 11+, RHEL 8+, Ubuntu 20.04+).  CUDA 12.9 still supports
+    # Maxwell through Blackwell, which CUDA 13 dropped.
+    container: nvidia/cuda:12.9.1-devel-ubuntu20.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (all major architectures, static runtime)
+        run: |
+          nvcc -O3 -arch=all-major -cudart static \
+               -Xcompiler "-O3 -static-libstdc++ -static-libgcc" \
+               -I. -o onion-gpu main.cu
+
+      - name: Report what the binary needs and contains
+        run: |
+          echo "--- dynamic dependencies ---"
+          ldd onion-gpu || true
+          echo "--- highest glibc symbol required ---"
+          objdump -T onion-gpu | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+          echo "--- GPU architectures baked in ---"
+          cuobjdump --list-elf onion-gpu | grep -o 'sm_[0-9]*' | sort -u | tr '\n' ' '
+
+      - name: Package
+        run: |
+          mkdir -p dist/onion-gpu-linux-x86_64
+          cp onion-gpu verify.py README.md SECURITY.md LICENSE dist/onion-gpu-linux-x86_64/
+          cd dist && tar czf ../onion-gpu-linux-x86_64.tar.gz onion-gpu-linux-x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: onion-gpu-linux-x86_64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: '12.9.1'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
+
+      - name: Build (all major architectures, static runtime and CRT)
+        shell: cmd
+        run: nvcc -O3 -arch=all-major -cudart static -Xcompiler "/O2 /MT" -I. -o onion-gpu.exe main.cu
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/onion-gpu-windows-x86_64 | Out-Null
+          Copy-Item onion-gpu.exe,verify.py,README.md,SECURITY.md,LICENSE dist/onion-gpu-windows-x86_64/
+          Compress-Archive -Path dist/onion-gpu-windows-x86_64 -DestinationPath onion-gpu-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: onion-gpu-windows-x86_64.zip
+
+  publish:
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Checksums
+        run: |
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} . \;
+          sha256sum onion-gpu-*.tar.gz onion-gpu-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            onion-gpu-linux-x86_64.tar.gz
+            onion-gpu-windows-x86_64.zip
+            SHA256SUMS.txt
+          generate_release_notes: false
+          body_path: .github/RELEASE_NOTES.md
